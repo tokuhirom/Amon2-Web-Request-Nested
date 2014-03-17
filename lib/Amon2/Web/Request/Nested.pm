@@ -17,13 +17,15 @@ use URI::Escape   ();
 use Cookie::Baker ();
 use HTTP::Entity::Parser;
 use WWW::Form::UrlEncoded qw/parse_urlencoded build_urlencoded/;
+use Data::NestedParams;
 
 use Encode;
 
-use Class::Tiny (
+use Class::Tiny {
     cookies              => \&_build_cookies,
     headers              => \&_build_headers,
     _uri_base            => \&_build__uri_base,
+    uri                  => \&_build_uri,
     base                 => \&_build_base,
     uploads              => \&_build_uploads,
     body_parameters      => \&_build_body_parameters,
@@ -31,7 +33,8 @@ use Class::Tiny (
     body_parameters_raw  => \&_build_body_parameters_raw,
     query_parameters_raw => \&_build_query_parameters_raw,
     _request_body        => \&_build__request_body,
-);
+    request_body_parser  => \&_build_request_body_parser,
+};
 
 sub new {
     my ( $class, $env ) = @_;
@@ -123,12 +126,10 @@ sub _build_request_body_parser {
         'multipart/form-data',
         'HTTP::Entity::Parser::MultiPart'
     );
-    if ( $self->env->{'amon2.nested.request.parse_json_body'} ) {
-        $parser->register(
-            'application/json',
-            'HTTP::Entity::Parser::JSON'
-        );
-    }
+    $parser->register(
+        'application/json',
+        'HTTP::Entity::Parser::JSON'
+    );
     $parser;
 }
 
@@ -144,8 +145,15 @@ sub _build__request_body {
     } else {
         my ( $params, $uploads ) = $self->request_body_parser->parse( $self->env );
         return [
-            [ $params->flatten ],
-            $uploads,
+            $params,
+            do {
+                my @uploads;
+                my @x = @$uploads;
+                while (my ($k, $v) = splice @$uploads, 0, 2) {
+                    push @uploads, $k, Plack::Request::Upload->new(%$v);
+                }
+                \@uploads;
+            },
         ];
     }
 }
@@ -158,14 +166,14 @@ sub _build_uploads {
 sub _build_body_parameters {
     my ($self) = @_;
     return expand_nested_params(
-        $self->decode_parameters( $self->_request_body->[0] )
+        $self->decode_parameters( @{$self->_request_body->[0]} )
     );
 }
 
 sub _build_query_parameters {
     my ($self) = @_;
     return expand_nested_params(
-        $self->decode_parameters( [ parse_urlencoded( $self->env->{'QUERY_STRING'} ) ] )
+        $self->decode_parameters( parse_urlencoded( $self->env->{'QUERY_STRING'} ) )
     );
 }
 
@@ -185,7 +193,7 @@ sub decode_parameters {
     while ( my ( $k, $v ) = splice @_, 0, 2 ) {
         push @decoded, Encode::decode_utf8($k), Encode::decode_utf8($v);
     }
-    return @decoded;
+    return \@decoded;
 }
 
 sub _build_body_parameters_raw {
