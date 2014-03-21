@@ -109,6 +109,7 @@ SHOGUN
         $content =~ s/\n/\r\n/g;
 
         my $req = make_request('multipart/form-data; boundary=BOUNDARY', $content);
+        isa_ok $req->body_parameters, 'HASH';
         is $req->body_parameters->{xxx}, 'yyy';
         ok not exists $req->uploads->{xxx};
         isa_ok $req->uploads->{yappo}, 'ARRAY';

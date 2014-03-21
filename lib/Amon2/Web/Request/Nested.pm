@@ -18,6 +18,13 @@ use Cookie::Baker ();
 use HTTP::Entity::Parser;
 use WWW::Form::UrlEncoded qw/parse_urlencoded build_urlencoded/;
 use Data::NestedParams;
+use Data::Recursive::Encode;
+
+use constant {
+    CONTENT_TYPE_EMPTY  => 0,
+    CONTENT_TYPE_JSON   => 1,
+    CONTENT_TYPE_NORMAL => 2,
+};
 
 use Encode;
 
@@ -126,10 +133,6 @@ sub _build_request_body_parser {
         'multipart/form-data',
         'HTTP::Entity::Parser::MultiPart'
     );
-    $parser->register(
-        'application/json',
-        'HTTP::Entity::Parser::JSON'
-    );
     $parser;
 }
 
@@ -137,13 +140,24 @@ sub _build_request_body_parser {
 sub _build__request_body {
     my $self = shift;
 
-    if ( !$self->env->{CONTENT_TYPE} ) {
+    my $content_type = $self->env->{CONTENT_TYPE};
+    if ( !$content_type ) {
         return [
             [],
-            []
+            [],
+            CONTENT_TYPE_EMPTY
+        ];
+    } elsif ($content_type =~ m{\Aapplication/json}) {
+        my $content = $self->request_body_parser->content( $self->env );
+        my $dat = JSON::XS::decode_json($content);
+        return [
+            $dat,
+            [],
+            CONTENT_TYPE_JSON
         ];
     } else {
         my ( $params, $uploads ) = $self->request_body_parser->parse( $self->env );
+        # $params: ArrayRef
         return [
             $params,
             do {
@@ -154,6 +168,7 @@ sub _build__request_body {
                 }
                 \@uploads;
             },
+            CONTENT_TYPE_NORMAL
         ];
     }
 }
@@ -165,9 +180,16 @@ sub _build_uploads {
 
 sub _build_body_parameters {
     my ($self) = @_;
-    return expand_nested_params(
-        $self->decode_parameters( @{$self->_request_body->[0]} )
-    );
+    my $body = $self->_request_body;
+    if ($body->[2] eq CONTENT_TYPE_JSON) {
+        return $body->[0];
+    } elsif ($body->[2] eq CONTENT_TYPE_EMPTY) {
+        return +{};
+    } elsif ($body->[2] eq CONTENT_TYPE_NORMAL) {
+        return expand_nested_params( $self->decode_parameters( @{$body->[0]} ) );
+    } else {
+        die "SHOULD NOT REACH HERE";
+    }
 }
 
 sub _build_query_parameters {
@@ -196,9 +218,25 @@ sub decode_parameters {
     return \@decoded;
 }
 
+# User can override this method if user want to support non UTF-8 encoding.
+sub encode_parameters {
+    my ($self, $data) = @_;
+    Data::Recursive::Encode->encode_utf8($data);
+}
+
 sub _build_body_parameters_raw {
     my $self = shift;
-    return expand_nested_params( $self->_request_body->[0] );
+
+    my $body = $self->_request_body;
+    if ($body->[2] eq CONTENT_TYPE_JSON) {
+        return $self->encode_parameters($body->[0]);
+    } elsif ($body->[2] eq CONTENT_TYPE_EMPTY) {
+        return +{ };
+    } elsif ($body->[2] eq CONTENT_TYPE_NORMAL) {
+        return expand_nested_params( $body->[0] );
+    } else {
+        die "Should not reach here";
+    }
 }
 
 sub _build_query_parameters_raw {
